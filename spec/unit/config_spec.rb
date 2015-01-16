@@ -46,6 +46,8 @@ module Omnibus
     include_examples "a configurable", :fetcher_retries, 5
     include_examples "a configurable", :fatal_licensing_warnings, false
     include_examples "a configurable", :fips_mode, false
+    include_examples "a configurable", :inject_cflags, ""
+    include_examples "a configurable", :inject_ldflags, ""
 
     describe "#workers" do
       context "when the Ohai data is not present" do

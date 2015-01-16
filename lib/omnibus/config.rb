@@ -533,6 +533,17 @@ module Omnibus
     # @return [true, false]
     default(:use_git_caching, true)
 
+    # Additional CFLAGS to inject into the environment. Note that
+    # e.g. CXXFLAGS inherits this, too.
+    #
+    # @return [String]
+    default(:inject_cflags, "")
+
+    # Additional LDFLAGS to inject into the environment.
+    #
+    # @return [String]
+    default(:inject_ldflags, "")
+
     # The number of worker threads for make. If this is not set
     # explicitly in config, it will attempt to determine via Ohai in
     # the builder, and failing that will default to 3
