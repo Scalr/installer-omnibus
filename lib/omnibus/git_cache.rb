@@ -136,6 +136,7 @@ refs}.freeze
       end
 
       git_cmd(%Q{tag -f "#{tag}"})
+      log.info(log_key) { "Tagged as: `#{tag}'" }
     end
 
     def restore
@@ -144,7 +145,7 @@ refs}.freeze
       create_cache_path
 
       if has_tag(tag)
-        log.internal(log_key) { "Detected tag `#{tag}' can be restored, marking it for restoration" }
+        log.info(log_key) { "Detected tag `#{tag}' can be restored, marking it for restoration" }
         git_cmd(%Q{tag -f restore_here "#{tag}"})
         true
       elsif has_tag("restore_here")
@@ -152,7 +153,7 @@ refs}.freeze
         restore_from_cache
         false
       else
-        log.internal(log_key) { "Could not find marker tag `restore_here', nothing to restore" }
+        log.info(log_key) { "Could not find marker tag `restore_here', nothing to restore" }
         false
       end
     end
