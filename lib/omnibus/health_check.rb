@@ -1,4 +1,4 @@
-#
+
 # Copyright 2012-2014 Chef Software, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -14,131 +14,20 @@
 # limitations under the License.
 #
 
+require "omnibus/sugarable"
+require "omnibus/whitelist"
+begin
+  require "pedump"
+rescue LoadError
+  STDERR.puts "pedump not found - windows health checks disabled"
+end
+
 module Omnibus
   class HealthCheck
+    include Instrumentation
     include Logging
     include Util
-
-    WHITELIST_LIBS = [
-      /ld-linux/,
-      /libc\.so/,
-      /libcrypt\.so/,
-      /libdl/,
-      /libfreebl\d\.so/,
-      /libgcc_s\.so/,
-      /libm\.so/,
-      /libnsl\.so/,
-      /libpthread/,
-      /libresolv\.so/,
-      /librt\.so/,
-      /libstdc\+\+\.so/,
-      /libutil\.so/,
-      /linux-vdso.+/,
-      /linux-gate\.so/,
-    ].freeze
-
-    ARCH_WHITELIST_LIBS = [
-      /libc\.so/,
-      /libcrypt\.so/,
-      /libdb-5\.3\.so/,
-      /libdl\.so/,
-      /libffi\.so/,
-      /libgdbm\.so/,
-      /libm\.so/,
-      /libnsl\.so/,
-      /libpthread\.so/,
-      /librt\.so/,
-      /libutil\.so/,
-    ].freeze
-
-    AIX_WHITELIST_LIBS = [
-      /libpthread\.a/,
-      /libpthreads\.a/,
-      /libdl.a/,
-      /librtl\.a/,
-      /libc\.a/,
-      /libcrypt\.a/,
-      /unix$/,
-    ].freeze
-
-    SOLARIS_WHITELIST_LIBS = [
-      /libaio\.so/,
-      /libavl\.so/,
-      /libcrypt_[di]\.so/,
-      /libcrypto.so/,
-      /libcurses\.so/,
-      /libdoor\.so/,
-      /libgen\.so/,
-      /libmd5\.so/,
-      /libmd\.so/,
-      /libmp\.so/,
-      /libresolv\.so/,
-      /libscf\.so/,
-      /libsec\.so/,
-      /libsocket\.so/,
-      /libssl.so/,
-      /libthread.so/,
-      /libuutil\.so/,
-      /libkstat\.so/,
-      # solaris 11 libraries:
-      /libc\.so\.1/,
-      /libm\.so\.2/,
-      /libdl\.so\.1/,
-      /libnsl\.so\.1/,
-      /libpthread\.so\.1/,
-      /librt\.so\.1/,
-      /libcrypt\.so\.1/,
-      /libgdbm\.so\.3/,
-      # solaris 9 libraries:
-      /libm\.so\.1/,
-      /libc_psr\.so\.1/,
-      /s9_preload\.so\.1/,
-    ].freeze
-
-    SMARTOS_WHITELIST_LIBS = [
-      /libm.so/,
-      /libpthread.so/,
-      /librt.so/,
-      /libsocket.so/,
-      /libdl.so/,
-      /libnsl.so/,
-      /libgen.so/,
-      /libmp.so/,
-      /libmd.so/,
-      /libc.so/,
-      /libgcc_s.so/,
-      /libstdc\+\+\.so/,
-      /libcrypt.so/,
-    ].freeze
-
-    MAC_WHITELIST_LIBS = [
-      /libobjc\.A\.dylib/,
-      /libSystem\.B\.dylib/,
-      /CoreFoundation/,
-      /CoreServices/,
-      /Tcl$/,
-      /Cocoa$/,
-      /Carbon$/,
-      /IOKit$/,
-      /Tk$/,
-      /libutil\.dylib/,
-      /libffi\.dylib/,
-      /libncurses\.5\.4\.dylib/,
-      /libiconv/,
-      /libstdc\+\+\.6\.dylib/,
-      /libc\+\+\.1\.dylib/,
-    ].freeze
-
-    FREEBSD_WHITELIST_LIBS = [
-      /libc\.so/,
-      /libgcc_s\.so/,
-      /libcrypt\.so/,
-      /libm\.so/,
-      /librt\.so/,
-      /libthr\.so/,
-      /libutil\.so/,
-      /libelf\.so/,
-    ].freeze
+    include Sugarable
 
     class << self
       # @see (HealthCheck#new)
@@ -175,114 +64,218 @@ module Omnibus
     #   if the healthchecks pass
     #
     def run!
-      if Ohai['platform'] == 'windows'
-        log.warn(log_key) { 'Skipping health check on Windows' }
-        return true
-      end
-      log.info(log_key) {"Running health on #{project.name}"}
-      bad_libs =  case Ohai['platform']
-                  when 'mac_os_x'
-                    health_check_otool
-                  when 'aix'
-                    health_check_aix
-                  else
-                    health_check_ldd
-                  end
+      measure("Health check time") do
+        log.info(log_key) { "Running health on #{project.name}" }
+        bad_libs =  case Ohai["platform"]
+                    when "mac_os_x"
+                      health_check_otool
+                    when "aix"
+                      health_check_aix
+                    when "windows"
+                      # TODO: objdump -p will provided a very limited check of
+                      # explicit dependencies on windows. Most dependencies are
+                      # implicit and hence not detected.
+                      log.warn(log_key) { "Skipping dependency health checks on Windows." }
+                      {}
+                    else
+                      health_check_ldd
+                    end
 
-      unresolved = []
-      unreliable = []
-      detail = []
+        unresolved = []
+        unreliable = []
+        detail = []
 
-      if bad_libs.keys.length > 0
-        bad_libs.each do |name, lib_hash|
-          lib_hash.each do |lib, linked_libs|
-            linked_libs.each do |linked, count|
-              if linked =~ /not found/
-                unresolved << lib unless unresolved.include? lib
-              else
-                unreliable << linked unless unreliable.include? linked
+        if bad_libs.keys.length > 0
+          bad_libs.each do |name, lib_hash|
+            lib_hash.each do |lib, linked_libs|
+              linked_libs.each do |linked, count|
+                if linked =~ /not found/
+                  unresolved << lib unless unresolved.include? lib
+                else
+                  unreliable << linked unless unreliable.include? linked
+                end
+                detail << "#{name}|#{lib}|#{linked}|#{count}"
               end
-              detail << "#{name}|#{lib}|#{linked}|#{count}"
             end
           end
-        end
 
-        log.error(log_key) { 'Failed!' }
-        bad_omnibus_libs, bad_omnibus_bins = bad_libs.keys.partition { |k| k.include? 'embedded/lib' }
+          log.error(log_key) { "Failed!" }
+          bad_omnibus_libs, bad_omnibus_bins = bad_libs.keys.partition { |k| k.include? "embedded/lib" }
 
-        log.error(log_key) do
-          out = "The following libraries have unsafe or unmet dependencies:\n"
-
-          bad_omnibus_libs.each do |lib|
-            out << "    --> #{lib}\n"
-          end
-
-          out
-        end
-
-        log.error(log_key) do
-          out = "The following binaries have unsafe or unmet dependencies:\n"
-
-          bad_omnibus_bins.each do |bin|
-            out << "    --> #{bin}\n"
-          end
-
-          out
-        end
-
-        if unresolved.length > 0
           log.error(log_key) do
-            out = "The following requirements could not be resolved:\n"
+            out = "The following libraries have unsafe or unmet dependencies:\n"
 
-            unresolved.each do |lib|
+            bad_omnibus_libs.each do |lib|
               out << "    --> #{lib}\n"
             end
 
             out
           end
-        end
 
-        if unreliable.length > 0
           log.error(log_key) do
-            out =  "The following libraries cannot be guaranteed to be on "
-            out << "target systems:\n"
+            out = "The following binaries have unsafe or unmet dependencies:\n"
 
-            unreliable.each do |lib|
-              out << "    --> #{lib}\n"
+            bad_omnibus_bins.each do |bin|
+              out << "    --> #{bin}\n"
             end
 
             out
           end
-        end
 
-        log.error(log_key) do
-          out = "The precise failures were:\n"
+          if unresolved.length > 0
+            log.error(log_key) do
+              out = "The following requirements could not be resolved:\n"
 
-          detail.each do |line|
-            item, dependency, location, count = line.split('|')
-            reason = location =~ /not found/ ? 'Unresolved dependency' : 'Unsafe dependency'
+              unresolved.each do |lib|
+                out << "    --> #{lib}\n"
+              end
 
-            out << "    --> #{item}\n"
-            out << "    DEPENDS ON: #{dependency}\n"
-            out << "      COUNT: #{count}\n"
-            out << "      PROVIDED BY: #{location}\n"
-            out << "      FAILED BECAUSE: #{reason}\n"
+              out
+            end
           end
 
-          out
+          if unreliable.length > 0
+            log.error(log_key) do
+              out =  "The following libraries cannot be guaranteed to be on "
+              out << "target systems:\n"
+
+              unreliable.each do |lib|
+                out << "    --> #{lib}\n"
+              end
+
+              out
+            end
+          end
+
+          log.error(log_key) do
+            out = "The precise failures were:\n"
+
+            detail.each do |line|
+              item, dependency, location, count = line.split("|")
+              reason = location =~ /not found/ ? "Unresolved dependency" : "Unsafe dependency"
+
+              out << "    --> #{item}\n"
+              out << "    DEPENDS ON: #{dependency}\n"
+              out << "      COUNT: #{count}\n"
+              out << "      PROVIDED BY: #{location}\n"
+              out << "      FAILED BECAUSE: #{reason}\n"
+            end
+
+            out
+          end
+
+          raise HealthCheckFailed
         end
 
-        raise HealthCheckFailed
+        conflict_map = {}
+
+        conflict_map = relocation_check if relocation_checkable?
+
+        if conflict_map.keys.length > 0
+          log.warn(log_key) { "Multiple dlls with overlapping images detected" }
+
+          conflict_map.each do |lib_name, data|
+            base = data[:base]
+            size = data[:size]
+            next_valid_base = data[:base] + data[:size]
+
+            log.warn(log_key) do
+              out =  "Overlapping dll detected:\n"
+              out << "    #{lib_name} :\n"
+              out << "    IMAGE BASE: #{hex}\n" % base
+              out << "    IMAGE SIZE: #{hex} (#{size} bytes)\n" % size
+              out << "    NEXT VALID BASE: #{hex}\n" % next_valid_base
+              out << "    CONFLICTS:\n"
+
+              data[:conflicts].each do |conflict_name|
+                cbase = conflict_map[conflict_name][:base]
+                csize = conflict_map[conflict_name][:size]
+                out << "    - #{conflict_name} #{hex} + #{hex}\n" % [cbase, csize]
+              end
+
+              out
+            end
+          end
+
+          # Don't raise an error yet. This is only bad for FIPS mode.
+        end
+
+        true
+      end
+    end
+
+    # Ensure the method relocation_check is able to run
+    #
+    # @return [Boolean]
+    #
+    def relocation_checkable?
+      return false unless windows?
+
+      begin
+        require "pedump"
+        true
+      rescue LoadError
+        false
+      end
+    end
+
+    # Check dll image location overlap/conflicts on windows.
+    #
+    # @return [Hash<String, Hash<Symbol, ...>>]
+    #   library_name ->
+    #     :base -> base address
+    #     :size -> the total image size in bytes
+    #     :conflicts -> array of library names that overlap
+    #
+    def relocation_check
+      conflict_map = {}
+
+      embedded_bin = "#{project.install_dir}/embedded/bin"
+      Dir.glob("#{embedded_bin}/*.dll") do |lib_path|
+        log.debug(log_key) { "Analyzing dependencies for #{lib_path}" }
+
+        File.open(lib_path, "rb") do |f|
+          dump = PEdump.new(lib_path)
+          pe = dump.pe f
+
+          # Don't scan dlls for a different architecture.
+          next if windows_arch_i386? == pe.x64?
+
+          lib_name = File.basename(lib_path)
+          base = pe.ioh.ImageBase
+          size = pe.ioh.SizeOfImage
+          conflicts = []
+
+          # This can be done more smartly but O(n^2) is just fine for n = small
+          conflict_map.each do |candidate_name, details|
+            unless details[:base] >= base + size ||
+                details[:base] + details[:size] <= base
+              details[:conflicts] << lib_name
+              conflicts << candidate_name
+            end
+          end
+
+          conflict_map[lib_name] = {
+            base: base,
+            size: size,
+            conflicts: conflicts,
+          }
+
+          log.debug(log_key) { "Discovered #{lib_name} at #{hex} + #{hex}" % [ base, size ] }
+        end
       end
 
-      true
+      # Filter out non-conflicting entries.
+      conflict_map.delete_if do |lib_name, details|
+        details[:conflicts].empty?
+      end
     end
 
     #
     # Run healthchecks against otool.
     #
-    # @return [Array<String>]
-    #   the bad libraries
+    # @return [Hash<String, Hash<String, Hash<String, Int>>>]
+    #   the bad libraries (library_name -> dependency_name -> satisfied_lib_path -> count)
     #
     def health_check_otool
       current_library = nil
@@ -305,8 +298,8 @@ module Omnibus
     #
     # Run healthchecks against aix.
     #
-    # @return [Array<String>]
-    #   the bad libraries
+    # @return [Hash<String, Hash<String, Hash<String, Int>>>]
+    #   the bad libraries (library_name -> dependency_name -> satisfied_lib_path -> count)
     #
     def health_check_aix
       current_library = nil
@@ -333,14 +326,18 @@ module Omnibus
     #
     # Run healthchecks against ldd.
     #
-    # @return [Array<String>]
-    #   the bad libraries
+    # @return [Hash<String, Hash<String, Hash<String, Int>>>]
+    #   the bad libraries (library_name -> dependency_name -> satisfied_lib_path -> count)
     #
     def health_check_ldd
+      regexp_ends = ".*(" + IGNORED_ENDINGS.map { |e| e.gsub(/\./, '\.') }.join("|") + ")$"
+      regexp_patterns = IGNORED_PATTERNS.map { |e| ".*" + e.gsub(/\//, '\/') + ".*" }.join("|")
+      regexp = regexp_ends + "|" + regexp_patterns
+
       current_library = nil
       bad_libs = {}
 
-      read_shared_libs("find #{project.install_dir}/ -type f | xargs ldd") do |line|
+      read_shared_libs("find #{project.install_dir}/ -type f -regextype posix-extended ! -regex '#{regexp}' | xargs ldd") do |line|
         case line
         when /^(.+):$/
           current_library = Regexp.last_match[1]
@@ -373,6 +370,16 @@ module Omnibus
     private
 
     #
+    # This is the printf style format string to render a pointer/size_t on the
+    # current platform.
+    #
+    # @return [String]
+    #
+    def hex
+      windows_arch_i386? ? "0x%08x" : "0x%016x"
+    end
+
+    #
     # The list of whitelisted (ignored) files from the project and softwares.
     #
     # @return [Array<String, Regexp>]
@@ -402,21 +409,32 @@ module Omnibus
     #
     # Check the given path and library for "bad" libraries.
     #
+    # @param [Hash<String, Hash<String, Hash<String, Int>>>]
+    #   the bad libraries (library_name -> dependency_name -> satisfied_lib_path -> count)
+    # @param [String]
+    #   the library being analyzed
+    # @param [String]
+    #   dependency library name
+    # @param [String]
+    #   actual path of library satisfying the dependency
+    #
+    # @return the modified bad_library hash
+    #
     def check_for_bad_library(bad_libs, current_library, name, linked)
       safe = nil
 
-      whitelist_libs = case Ohai['platform']
-                       when 'arch'
+      whitelist_libs = case Ohai["platform"]
+                       when "arch"
                          ARCH_WHITELIST_LIBS
-                       when 'mac_os_x'
+                       when "mac_os_x"
                          MAC_WHITELIST_LIBS
-                       when 'solaris2'
+                       when "solaris2"
                          SOLARIS_WHITELIST_LIBS
-                       when 'smartos'
+                       when "smartos"
                          SMARTOS_WHITELIST_LIBS
-                       when 'freebsd'
+                       when "freebsd"
                          FREEBSD_WHITELIST_LIBS
-                       when 'aix'
+                       when "aix"
                          AIX_WHITELIST_LIBS
                        else
                          WHITELIST_LIBS

@@ -80,10 +80,10 @@ module Omnibus
     #
     def vendor(val = NULL)
       if null?(val)
-        @vendor || 'Omnibus <omnibus@getchef.com>'
+        @vendor || "Omnibus <omnibus@getchef.com>"
       else
         unless val.is_a?(String)
-          raise InvalidValue.new(:vendor, 'be a String')
+          raise InvalidValue.new(:vendor, "be a String")
         end
 
         @vendor = val
@@ -105,10 +105,10 @@ module Omnibus
     #
     def license(val = NULL)
       if null?(val)
-        @license || 'unknown'
+        @license || project.license
       else
         unless val.is_a?(String)
-          raise InvalidValue.new(:license, 'be a String')
+          raise InvalidValue.new(:license, "be a String")
         end
 
         @license = val
@@ -130,10 +130,10 @@ module Omnibus
     #
     def priority(val = NULL)
       if null?(val)
-        @priority || 'extra'
+        @priority || "extra"
       else
         unless val.is_a?(String)
-          raise InvalidValue.new(:priority, 'be a String')
+          raise InvalidValue.new(:priority, "be a String")
         end
 
         @priority = val
@@ -155,16 +155,96 @@ module Omnibus
     #
     def section(val = NULL)
       if null?(val)
-        @section || 'misc'
+        @section || "misc"
       else
         unless val.is_a?(String)
-          raise InvalidValue.new(:section, 'be a String')
+          raise InvalidValue.new(:section, "be a String")
         end
 
         @section = val
       end
     end
     expose :section
+
+    #
+    # Compression algorithm (gzip, xz, none) to use (-Z).
+    #
+    # @example
+    #   compression_type :xz
+    #
+    # @param [Symbol] val
+    #   type of compression (:gzip, :xz, :none)
+    #
+    # @return [Symbol]
+    #   type of compression for this package
+    #
+    def compression_type(val = NULL)
+      if null?(val)
+        @compression_type || :gzip
+      else
+        unless val.is_a?(Symbol) && [:gzip, :xz, :none].member?(val)
+          raise InvalidValue.new(:compression_type, "be a Symbol (:gzip, :xz, or :none)")
+        end
+
+        @compression_type = val
+      end
+    end
+    expose :compression_type
+
+    #
+    # Compression level (1-9) to use (-Z).
+    #
+    # @example
+    #   compression_level 1
+    #
+    # @param [Integer] val
+    #   level of compression (1, .., 9)
+    #
+    # @return [Integer]
+    #   level of compression for this package
+    #
+    def compression_level(val = NULL)
+      if null?(val)
+        @compression_level || 9
+      else
+        unless val.is_a?(Integer) && 1 <= val && 9 >= val
+          raise InvalidValue.new(:compression_level, "be an Integer between 1 and 9")
+        end
+
+        @compression_level = val
+      end
+    end
+    expose :compression_level
+
+    #
+    # Compression strategy to use (-Z).
+    # For gzip: :filtered, :huffman, :rle, or :fixed;
+    # for xz: :extreme
+    # (nil means parameter will not be passsed to dpkg-deb)
+    #
+    # @example
+    #   compression_strategy :extreme
+    #
+    # @param [Symbol] val
+    #   compression strategy
+    #
+    # @return [Symbol]
+    #   compression strategy for this package
+    #
+    def compression_strategy(val = NULL)
+      if null?(val)
+        @compression_strategy
+      else
+        unless val.is_a?(Symbol) &&
+            [:filtered, :huffman, :rle, :fixed, :extreme].member?(val)
+          raise InvalidValue.new(:compression_strategy, "be a Symbol (:filtered, "\
+                                                        ":huffman, :rle, :fixed, or :extreme)")
+        end
+
+        @compression_strategy = val
+      end
+    end
+    expose :compression_strategy
 
     #
     # @!endgroup
@@ -187,7 +267,7 @@ module Omnibus
     # @return [String]
     #
     def debian_dir
-      @debian_dir ||= File.join(staging_dir, 'DEBIAN')
+      @debian_dir ||= File.join(staging_dir, "DEBIAN")
     end
 
     #
@@ -197,8 +277,8 @@ module Omnibus
     # @return [void]
     #
     def write_control_file
-      render_template(resource_path('control.erb'),
-        destination: File.join(debian_dir, 'control'),
+      render_template(resource_path("control.erb"),
+        destination: File.join(debian_dir, "control"),
         variables: {
           name:           safe_base_package_name,
           version:        safe_version,
@@ -227,8 +307,8 @@ module Omnibus
     def write_conffiles_file
       return if project.config_files.empty?
 
-      render_template(resource_path('conffiles.erb'),
-        destination: File.join(debian_dir, 'conffiles'),
+      render_template(resource_path("conffiles.erb"),
+        destination: File.join(debian_dir, "conffiles"),
         variables: {
           config_files: project.config_files,
         }
@@ -242,12 +322,14 @@ module Omnibus
     # @return [void]
     #
     def write_scripts
-      %w(preinst postinst prerm postrm).each do |script|
+      %w{preinst postinst prerm postrm}.each do |script|
         path = File.join(project.package_scripts_path, script)
 
         if File.file?(path)
-          log.debug(log_key) { "Adding script `#{script}' to `#{debian_dir}'" }
+          log.debug(log_key) { "Adding script `#{script}' to `#{debian_dir}' from #{path}" }
           copy_file(path, debian_dir)
+          log.debug(log_key) { "SCRIPT FILE:  #{debian_dir}/#{script}" }
+          FileUtils.chmod(0755, File.join(debian_dir, script))
         end
       end
     end
@@ -261,16 +343,16 @@ module Omnibus
     def write_md5_sums
       path = "#{staging_dir}/**/*"
       hash = FileSyncer.glob(path).inject({}) do |hash, path|
-        if File.file?(path) && !File.symlink?(path)
-          relative_path = path.gsub("#{staging_dir}/", '')
+        if File.file?(path) && !File.symlink?(path) && !(File.dirname(path) == debian_dir)
+          relative_path = path.gsub("#{staging_dir}/", "")
           hash[relative_path] = digest(path, :md5)
         end
 
         hash
       end
 
-      render_template(resource_path('md5sums.erb'),
-        destination: File.join(debian_dir, 'md5sums'),
+      render_template(resource_path("md5sums.erb"),
+        destination: File.join(debian_dir, "md5sums"),
         variables: {
           md5sums: hash,
         }
@@ -289,7 +371,21 @@ module Omnibus
 
       # Execute the build command
       Dir.chdir(Config.package_dir) do
-        shellout!("fakeroot dpkg-deb -z9 -Zgzip -D --build #{staging_dir} #{package_name}")
+        shellout!("fakeroot dpkg-deb #{compression_params} -D --build #{staging_dir} #{package_name}")
+      end
+    end
+
+    #
+    # Return the parameters passed to dpkg-deb for setting the compression
+    # according to configuration.
+    #
+    # @return [String]
+    #
+    def compression_params
+      if compression_strategy
+        "-z#{compression_level} -Z#{compression_type} -S#{compression_strategy}"
+      else
+        "-z#{compression_level} -Z#{compression_type}"
       end
     end
 
@@ -326,7 +422,7 @@ module Omnibus
       if project.package_name =~ /\A[a-z0-9\.\+\-]+\z/
         project.package_name.dup
       else
-        converted = project.package_name.downcase.gsub(/[^a-z0-9\.\+\-]+/, '-')
+        converted = project.package_name.downcase.gsub(/[^a-z0-9\.\+\-]+/, "-")
 
         log.warn(log_key) do
           "The `name' component of Debian package names can only include " \
@@ -359,7 +455,7 @@ module Omnibus
       version = project.build_version.dup
 
       if version =~ /\-/
-        converted = version.gsub('-', '~')
+        converted = version.tr("-", "~")
 
         log.warn(log_key) do
           "Dashes hold special significance in the Debian package versions. " \
@@ -376,7 +472,7 @@ module Omnibus
       if version =~ /\A[a-zA-Z0-9\.\+\:\~]+\z/
         version
       else
-        converted = version.gsub(/[^a-zA-Z0-9\.\+\:\~]+/, '_')
+        converted = version.gsub(/[^a-zA-Z0-9\.\+\:\~]+/, "_")
 
         log.warn(log_key) do
           "The `version' component of Debian package names can only include " \
@@ -395,25 +491,7 @@ module Omnibus
     # @return [String]
     #
     def safe_architecture
-      case Ohai['kernel']['machine']
-      when 'x86_64'
-        'amd64'
-      when 'i686'
-        'i386'
-      when 'armv6l'
-        if Ohai['platform'] == 'raspbian'
-          'armhf'
-        else
-          'armv6l'
-        end
-      when 'ppc64le'
-        # Debian prefers to use ppc64el for little endian architecture name 
-        # where as others like gnutools/rhel use ppc64le( note the last 2 chars)
-        # see http://linux.debian.ports.powerpc.narkive.com/8eeWSBtZ/switching-ppc64el-port-name-to-ppc64le
-        'ppc64el'  #dpkg --print-architecture = ppc64el
-      else
-        Ohai['kernel']['machine']
-      end
+      @safe_architecture ||= shellout!("dpkg --print-architecture").stdout.split("\n").first || "noarch"
     end
   end
 end

@@ -13,14 +13,39 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-
-require 'erb'
+require "erb"
 
 module Omnibus
   module Templating
     def self.included(base)
       # This module also requires logging
       base.send(:include, Logging)
+    end
+
+    #
+    # Render an erb template to a String variable.
+    #
+    # @return [String]
+    #
+    # @param [String] source
+    #   the path on disk where the ERB template lives
+    #
+    # @option options [Fixnum] :mode (default: +0644+)
+    #   the mode of the rendered file
+    # @option options [Hash] :variables (default: +{}+)
+    #   the list of variables to pass to the template
+    #
+    def render_template_content(source, variables = {})
+      template = ERB.new(File.read(source), nil, "-")
+
+      struct =
+        if variables.empty?
+          Struct.new("Empty")
+        else
+          Struct.new(*variables.keys).new(*variables.values)
+        end
+
+      template.result(struct.instance_eval { binding })
     end
 
     #
@@ -40,9 +65,8 @@ module Omnibus
     #   the list of variables to pass to the template
     #
     def render_template(source, options = {})
-      destination = options.delete(:destination) || source.chomp('.erb')
-
-      mode      = options.delete(:mode) || 0644
+      destination = options.delete(:destination) || source.chomp(".erb")
+      mode = options.delete(:mode) || 0644
       variables = options.delete(:variables) || {}
 
       log.info(log_key) { "Rendering `#{source}' to `#{destination}'" }
@@ -52,11 +76,10 @@ module Omnibus
           "Unknown option(s): #{options.keys.map(&:inspect).join(', ')}"
       end
 
-      template = ERB.new(File.read(source), nil, '-')
-      struct   = Struct.new(*variables.keys).new(*variables.values)
-      result   = template.result(struct.instance_eval { binding })
+      # String value returned from #render_template_content
+      result = render_template_content(source, variables)
 
-      File.open(destination, 'w', mode) do |file|
+      File.open(destination, "w", mode) do |file|
         file.write(result)
       end
 

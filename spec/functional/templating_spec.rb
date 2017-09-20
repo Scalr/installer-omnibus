@@ -1,4 +1,4 @@
-require 'spec_helper'
+require "spec_helper"
 
 module Omnibus
   class RandomClass
@@ -8,64 +8,76 @@ module Omnibus
   describe Templating do
     subject { RandomClass.new }
 
-    describe '#render_template' do
-      let(:source)      { "#{tmp_path}/source.erb" }
-      let(:destination) { "#{tmp_path}/final" }
-      let(:mode)        { 0644 }
-      let(:variables)   { { name: 'Name' } }
-      let(:contents) do
-        <<-EOH.gsub(/^ {10}/, '')
+    let(:source)      { File.join(tmp_path, "source.erb") }
+    let(:destination) { File.join(tmp_path, "final") }
+    let(:mode)        { 0644 }
+    let(:variables)   { { name: "Name" } }
+    let(:contents) do
+      <<-EOH.gsub(/^ {10}/, "")
           <%= name %>
 
           <% if false -%>
             This is magic!
           <% end -%>
         EOH
-      end
+    end
 
-      let(:options) do
-        {
-          destination: destination,
-          variables:   variables,
-          mode:        mode,
-        }
-      end
+    let(:options) do
+      {
+        destination: destination,
+        variables:   variables,
+        mode:        mode,
+      }
+    end
 
-      before do
-        File.open(source, 'w') { |f| f.write(contents) }
-      end
+    before do
+      File.open(source, "w") { |f| f.write(contents) }
+    end
 
-      context 'when no destination is given' do
+    describe "#render_template" do
+      context "when no destination is given" do
         let(:destination) { nil }
 
-        it 'renders adjacent, without the erb extension' do
+        it "renders adjacent, without the erb extension" do
           subject.render_template(source, options)
-          expect("#{tmp_path}/source").to be_a_file
+          expect(File.join(tmp_path, "source")).to be_a_file
         end
       end
 
-      context 'when a destination is given' do
-
-        it 'renders at the destination' do
+      context "when a destination is given" do
+        it "renders at the destination" do
           subject.render_template(source, options)
           expect(destination).to be_a_file
         end
       end
 
-      context 'when a mode is given' do
+      context "when a mode is given", :not_supported_on_windows do
         let(:mode) { 0755 }
 
-        it 'renders the object with the mode' do
+        it "renders the object with the mode" do
           subject.render_template(source, options)
           expect(destination).to be_an_executable
         end
       end
+    end
 
-      context 'when an undefined variable is used' do
+    describe "#render_template_content" do
+      context "when an undefined variable is used" do
         let(:contents) { "<%= not_a_real_variable %>" }
 
-        it 'raise an exception' do
-          expect { subject.render_template(source, options) }.to raise_error
+        it "raise an exception" do
+          expect do
+            subject.render_template_content(source, variables)
+          end.to raise_error(NameError)
+        end
+      end
+
+      context "when no variables are present" do
+        let(:contents) { "static content" }
+        let(:variables) { {} }
+
+        it "renders the template" do
+          expect(subject.render_template_content(source, variables)).to eq("static content")
         end
       end
     end
