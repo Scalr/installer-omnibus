@@ -30,6 +30,7 @@ Gem::Specification.new do |gem|
   gem.add_dependency "ruby-progressbar", "~> 1.7"
   gem.add_dependency "thor",             "~> 0.18"
   gem.add_dependency "license_scout",    "~> 1.0.1"
+  gem.add_dependency "mixlib-cli",       "1.7.0"
 
   gem.add_dependency "mixlib-versioning"
   gem.add_dependency "pedump"
